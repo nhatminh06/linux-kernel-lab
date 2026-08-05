@@ -45,7 +45,7 @@ GDB can attach before any instruction executes.
     Continuing.
 
     Breakpoint 1, start_kernel () at init/main.c:904
-    904	{
+    904 {
 
 ## Backtrace output
 

@@ -1,0 +1,20 @@
+{
+  // Repository-specific exclusions for markdownlint-cli2 (see CI:
+  // .github/workflows/ci.yml § "Markdown quality").
+  //
+  // MD013 (line-length): disabled. This repo's docs are prose- and
+  // table-heavy technical writeups (config diffs, GDB transcripts,
+  // Makefile/script reference tables); wrapping every line to 80 columns
+  // would hurt readability of tables and command examples far more than
+  // it would help, and CommonMark/GFM renderers don't care about source
+  // line length.
+  //
+  // MD060 (table-column-style): disabled. This rule wants GFM table
+  // pipes packed with no padding ("compact" style); this repo's tables
+  // use padded pipes for source readability, which is a supported,
+  // valid GFM style, just not the one this rule prefers.
+  "config": {
+    "MD013": false,
+    "MD060": false
+  }
+}

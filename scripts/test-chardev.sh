@@ -7,9 +7,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./common.sh
+# shellcheck source=SCRIPTDIR/common.sh
 source "${SCRIPT_DIR}/common.sh"
-REPO_ROOT="$(repo_root)"
 
 usage() {
     cat <<EOF

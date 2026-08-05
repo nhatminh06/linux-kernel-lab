@@ -95,4 +95,7 @@ repo_root() {
 }
 
 # Default output directory for generated artifacts (never Git-tracked).
+# Consumed by every script that sources this file, not by common.sh
+# itself, so shellcheck can't see the use when checking this file alone.
+# shellcheck disable=SC2034
 readonly LAB_DEFAULT_WORKDIR="${LAB_WORKDIR:-$(repo_root)/.lab-build}"

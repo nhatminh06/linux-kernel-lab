@@ -149,7 +149,7 @@ machine, not this repository's layout):
     Continuing.
 
     Breakpoint 1, start_kernel () at init/main.c:904
-    904	{
+    904 {
 
     (gdb) bt
     #0  start_kernel () at init/main.c:904
