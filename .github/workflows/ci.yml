@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shell-quality:
+    name: Shell script quality
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: bash -n (syntax check) on all shell scripts
+        run: |
+          set -euo pipefail
+          status=0
+          while IFS= read -r -d '' f; do
+            echo "::group::bash -n $f"
+            bash -n "$f" || status=1
+            echo "::endgroup::"
+          done < <(find . -name '*.sh' -not -path './.git/*' -print0)
+          exit "$status"
+
+      - name: shellcheck
+        uses: ludeeus/action-shellcheck@2.0.0
+        with:
+          severity: warning
+          scandir: './scripts'
+
+  markdown-lint:
+    name: Markdown quality
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: markdownlint
+        uses: DavidAnson/markdownlint-cli2-action@v24
+        with:
+          globs: |
+            **/*.md
+            !**/node_modules/**
+
+  driver-build:
+    name: Driver compilation (Ubuntu generic headers)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install matching generic kernel headers and build tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            "linux-headers-$(uname -r)" build-essential
+
+      - name: Build chardev-driver against the runner's generic headers
+        # NOTE: this compiles against Ubuntu's generic kernel headers on
+        # the GitHub-hosted runner, NOT the Linux 6.10 tree or CachyOS
+        # kernel this project documents building against. A pass here
+        # only shows the driver compiles against a reasonably recent
+        # mainline-derived kernel API; it does not prove compatibility
+        # with this repository's documented kernel/toolchain combination.
+        run: |
+          set -euo pipefail
+          cd chardev-driver
+          make
+
+  static-analysis:
+    name: cppcheck (best-effort, non-blocking)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install cppcheck
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cppcheck
+
+      - name: Run cppcheck on the driver source
+        # Best-effort only, and allowed to fail (continue-on-error below):
+        # without real kernel headers on the include path, cppcheck can't
+        # resolve kernel attribute macros (__init, __exit, __user) or
+        # KERN_* logging macros, which can produce noise unrelated to
+        # actual code quality. driver-compile (a real compiler, with real
+        # headers) is the authoritative correctness check; this job is a
+        # supplementary style/portability scan, not a compatibility gate.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          cppcheck --enable=warning,style,performance,portability \
+            --suppress=missingIncludeSystem \
+            --error-exitcode=1 \
+            chardev-driver/chardev.c
+
+  script-smoke-tests:
+    name: Script smoke tests (non-privileged, no QEMU/insmod)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: --help exits 0 for every script
+        run: |
+          set -euo pipefail
+          for f in scripts/*.sh; do
+            [ "$(basename "$f")" = "common.sh" ] && continue
+            echo "::group::$f --help"
+            bash "$f" --help
+            echo "::endgroup::"
+          done
+
+      - name: Missing required argument is a clean, non-zero failure
+        run: |
+          set -euo pipefail
+          for f in build-kernel build-busybox build-initramfs run-qemu debug-kernel test-chardev; do
+            echo "::group::$f (no args)"
+            if bash "scripts/${f}.sh"; then
+              echo "expected non-zero exit for missing arguments" >&2
+              exit 1
+            fi
+            echo "::endgroup::"
+          done
+
+      - name: Missing source directory is reported, not silently accepted
+        run: |
+          set -euo pipefail
+          if bash scripts/build-kernel.sh --source /nonexistent-path; then
+            echo "expected failure for a nonexistent --source" >&2
+            exit 1
+          fi
+          if bash scripts/build-busybox.sh --source /nonexistent-path; then
+            echo "expected failure for a nonexistent --source" >&2
+            exit 1
+          fi
+
+      - name: check-dependencies.sh reports available/missing tools
+        run: bash scripts/check-dependencies.sh || true
+
+      - name: common.sh is safe to source with no side effects
+        run: |
+          set -euo pipefail
+          source scripts/common.sh
+          log_info "sourced common.sh successfully"

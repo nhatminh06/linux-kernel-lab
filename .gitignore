@@ -1,11 +1,56 @@
+# --- Build outputs specific to this repo's scripts -------------------------
+.lab-build/
+
+# --- Kernel / module build artifacts ---------------------------------------
 *.o
 *.ko
 *.mod
 *.mod.c
+*.cmd
 *.symvers
 *.order
 Module.symvers
 modules.order
-*.cpio.gz
 .tmp_versions/
+.cache.mk
+Module.markers
+modules.builtin*
+
+# --- Kernel images and generated config -------------------------------------
+# kernel-build/config-diff.patch is a tracked *.patch file, not *.config,
+# so it is unaffected by the rule below.
+vmlinux
+vmlinux.o
+System.map
+bzImage
+zImage
+*.config
+
+# --- Vendored source trees (never commit these) -----------------------------
+/linux/
+/linux-*/
+/busybox/
+/busybox-*/
+
+# --- Initramfs staging/output -----------------------------------------------
+*.cpio
+*.cpio.gz
 _install/
+initramfs-root/
+initramfs.cpio*
+
+# --- GDB / debugger state ----------------------------------------------------
+.gdb_history
+.gdbinit.local
+core
+core.*
+vgcore.*
+
+# --- Editor / OS files --------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
