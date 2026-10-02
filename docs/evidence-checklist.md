@@ -45,12 +45,14 @@ then link them from the root README's "Evidence" section.
 
 ## GDB
 
-- [ ] `scripts/debug-kernel.sh` command (or manual `-s -S` QEMU command) used
-- [ ] GDB connection command (`target remote localhost:1234`)
-- [ ] Breakpoint set/hit at `start_kernel` (`break start_kernel`, then the
+- [x] GDB connection command (`target remote :1234`), preserved in
+      `qemu-gdb/notes.md`
+- [x] Breakpoint set/hit at `start_kernel` (`break start_kernel`, then the
       "Breakpoint 1, start_kernel () at init/main.c:NNN" output)
+- [x] Backtrace (`bt`), preserved in `qemu-gdb/notes.md` and rendered in
+      `assets/gdb-start-kernel.png`
+- [ ] Exact `scripts/debug-kernel.sh` invocation used for a fresh session
 - [ ] Register view (`info registers`)
-- [ ] Backtrace (`bt`)
 - [ ] Source listing at the breakpoint (`list`)
 
 ## Environment
