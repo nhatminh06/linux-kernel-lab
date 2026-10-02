@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
-# Smoke test for chardev-driver: loads the module (if not already loaded),
-# writes a message to /dev/mychardev, reads it back, and checks the two
-# match exactly. Matches the driver's actual semantics: a write replaces a
-# single shared message buffer, and read returns exactly what was last
-# written (see chardev-driver/chardev.c).
+# Functional test for the chardev-driver message ring.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,8 +10,8 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") --module PATH [options]
 
-Smoke-test the mychardev character device: load the module if needed,
-write a message, read it back, and compare byte-for-byte.
+Test the mychardev message ring, including FIFO ordering, binary data,
+partial reads, capacity handling, and reuse after draining.
 
 Required:
   --module PATH         Path to the built chardev.ko (or set CHARDEV_MODULE).
@@ -25,7 +21,7 @@ Options:
                           Default: /dev/mychardev
   --message STRING        Test message (or set CHARDEV_MESSAGE). Default:
                           "hello from test-chardev.sh". Must fit in the
-                          driver's 256-byte buffer (255 usable bytes).
+                          driver's 256-byte payload limit.
   --allow-mknod            If the device node doesn't appear automatically
                             (e.g. no udev running), create it manually with
                             mknod using the major number from dmesg. Off by
@@ -61,15 +57,11 @@ done
 [[ -n "${MODULE_PATH}" ]] || { usage; log_fatal "Missing --module PATH (or set CHARDEV_MODULE); build it first with 'make' in chardev-driver/."; }
 require_file "${MODULE_PATH}" "chardev kernel module"
 
-if ((${#MESSAGE} > 255)); then
-    log_fatal "Test message is ${#MESSAGE} bytes; the driver's buffer only holds 255 usable bytes."
-fi
-
 if [[ "${EUID}" -ne 0 ]]; then
     log_fatal "This test loads a kernel module and writes to a device node; re-run with sudo."
 fi
 
-require_cmd dmesg insmod rmmod lsmod
+require_cmd dmesg insmod rmmod lsmod python3
 
 LOADED_BY_SCRIPT=0
 MKNOD_BY_SCRIPT=0
@@ -117,19 +109,82 @@ if [[ ! -e "${DEVICE_PATH}" ]]; then
     fi
 fi
 
-log_info "Writing test message to ${DEVICE_PATH}: ${MESSAGE@Q}"
-printf '%s' "${MESSAGE}" >"${DEVICE_PATH}"
+log_info "Running message-ring tests against ${DEVICE_PATH}."
+python3 - "${DEVICE_PATH}" "${MESSAGE}" <<'PY'
+import errno
+import os
+import sys
 
-ACTUAL="$(cat "${DEVICE_PATH}")"
+device, configured_message = sys.argv[1:]
+
+
+def write_message(payload):
+    fd = os.open(device, os.O_WRONLY)
+    try:
+        written = os.write(fd, payload)
+    finally:
+        os.close(fd)
+    assert written == len(payload), (written, len(payload))
+
+
+def read_message(size=256):
+    fd = os.open(device, os.O_RDONLY)
+    try:
+        return os.read(fd, size)
+    finally:
+        os.close(fd)
+
+
+# Drain messages left by a module that was already loaded before this test.
+while read_message():
+    pass
+
+payload = configured_message.encode()
+if len(payload) > 256:
+    raise ValueError(
+        f"configured test message is {len(payload)} bytes; maximum is 256"
+    )
+write_message(payload)
+assert read_message() == payload
+
+fifo = [b"first", b"second", b"third"]
+for payload in fifo:
+    write_message(payload)
+for payload in fifo:
+    assert read_message() == payload
+
+binary = b"before\x00after"
+write_message(binary)
+assert read_message(4) == binary[:4]
+assert read_message() == binary[4:]
+
+for number in range(16):
+    write_message(bytes([number]))
+try:
+    write_message(b"overflow")
+except OSError as error:
+    assert error.errno == errno.ENOSPC, error
+else:
+    raise AssertionError("17th queued message unexpectedly succeeded")
+
+for number in range(16):
+    assert read_message() == bytes([number])
+
+write_message(b"reused")
+assert read_message() == b"reused"
+assert read_message() == b""
+PY
 
 log_info "Recent dmesg output after write/read:"
 dmesg | tail -10
 
-if [[ "${ACTUAL}" == "${MESSAGE}" ]]; then
-    log_info "PASS: read back exactly what was written (${#ACTUAL} bytes)."
-    exit 0
-else
-    log_warn "Expected: ${MESSAGE@Q}"
-    log_warn "Actual:   ${ACTUAL@Q}"
-    log_fatal "FAIL: device did not return the same bytes that were written."
+if ((LOADED_BY_SCRIPT)); then
+    log_info "Unloading module ${MODULE_NAME} to verify clean removal."
+    rmmod "${MODULE_NAME}"
+    LOADED_BY_SCRIPT=0
+    if lsmod | grep -qw "${MODULE_NAME}"; then
+        log_fatal "Module ${MODULE_NAME} is still loaded after rmmod."
+    fi
 fi
+
+log_info "PASS: message-ring tests completed successfully."

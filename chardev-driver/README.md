@@ -6,20 +6,28 @@ kernel communication through the standard `read`/`write` VFS interface.
 ## What it does
 
 `chardev.c` registers a character device named `mychardev` backed by a
-single 256-byte in-kernel buffer (`msg`):
+fixed-size circular queue. The queue contains 16 slots, each with an exact
+payload length and 256-byte data array. `head` identifies the oldest message,
+`tail` identifies the next free slot, and `count` distinguishes empty from
+full when the indices wrap.
 
-- **write(2)** copies up to 255 bytes from the calling process into `msg`
-  via `copy_from_user()`, null-terminates it, and records the length.
-- **read(2)** returns exactly the bytes from the most recent write, via
-  `simple_read_from_buffer()` (a kernel helper that safely copies to
-  userspace and advances the file offset for you).
-- A single `struct mutex` (`dev_lock`) serializes access to `msg`, since
-  the buffer is shared by every open file descriptor — without it,
-  concurrent writers/readers from different processes could interleave.
+- **write(2)** accepts up to 256 bytes, copies the bytes into the next free
+  slot with `copy_from_user()`, and appends that message to the queue. Payloads
+  are length-tracked and may contain NUL bytes. A larger write is reported as
+  a short, 256-byte write. A write to a full queue returns `ENOSPC`.
+- **read(2)** copies bytes from the oldest message with `copy_to_user()`.
+  Messages are consumed in FIFO order. If the userspace buffer is smaller
+  than the message, a queue-wide offset records progress and later reads
+  continue that same message. The slot is removed only after its entire
+  payload has been copied. Reading an empty queue returns 0.
+- One `struct mutex` protects all queue indices, lengths, data, and the
+  partial-read offset. The mutex remains held during userspace copies; unlike
+  a spinlock it may sleep, and this prevents concurrent readers or writers
+  from changing the active slot during a copy.
 
-There is deliberately no ioctl, no per-open state, and no growth beyond
-one buffer: this is a teaching driver for the VFS `file_operations`
-interface, not a general-purpose IPC mechanism.
+The fixed arrays mean the read and write paths perform no dynamic allocation.
+There is deliberately no ioctl or per-open state: this is a teaching driver
+for the VFS `file_operations` interface, not a general-purpose IPC mechanism.
 
 ## How the major number is assigned
 
@@ -64,8 +72,9 @@ flags and the module will fail to build or load (see the root README's
 with GCC; `LLVM=1` was required separately when building this module
 against a distribution kernel that used Clang/LTO.
 
-`scripts/test-chardev.sh` in the repository root automates load, write,
-read-back, and unload as a smoke test.
+`scripts/test-chardev.sh` in the repository root automates module loading and
+tests a round trip, FIFO ordering, an embedded NUL with partial reads, full
+queue rejection, reuse after draining, empty reads, and cleanup/unloading.
 
 ## Load and unload
 
@@ -115,35 +124,15 @@ already registered, and `insmod` reports the negative return code.
   is expected and harmless for local development but worth knowing
   about before it shows up unexplained in a bug report.
 
-## Correctness fixes applied in this update
-
-The original driver worked for the documented single-user test case but
-had three gaps, fixed without changing its external behavior or API:
-
-- **No error checking on init.** `register_chrdev()`, `class_create()`,
-  and `device_create()` can each fail (e.g. major-number exhaustion,
-  allocation failure) and previously the return values were ignored,
-  which could leave `chardev_init()` reporting success while the device
-  was only partially set up. Each call is now checked, and any failure
-  unwinds the steps already completed and returns the real error code
-  to `insmod`.
-- **No locking around the shared buffer.** `msg` is one buffer shared by
-  every file descriptor; concurrent `read`/`write` from two processes
-  could previously interleave a partial `copy_from_user()` with a
-  concurrent `simple_read_from_buffer()`. A `struct mutex` now serializes
-  access.
-- **`read()` used `strlen(msg)`** to find the message length instead of
-  tracking it explicitly. This happened to work for plain text but would
-  under- or over-read if a write ever contained an embedded NUL. `read()`
-  now uses the exact length recorded at write time.
-
 ## Known limitations
 
-- Single global message buffer shared by all opens — there is no
-  per-file-descriptor state, so two processes writing concurrently will
-  race for whose message "wins" (the mutex only prevents corrupting the
-  buffer mid-copy, it does not give each opener an independent buffer).
-- No `ioctl`, `poll`/`select`, or `mmap` support.
+- The queue is global across all opens and holds at most 16 messages. A full
+  queue returns `ENOSPC`; an empty queue returns EOF rather than waiting.
+- Partial-read progress is also global. Multiple readers safely consume one
+  FIFO stream, but do not receive independent copies or independent cursors.
+- Reads and writes do not block waiting for queue state, and the driver does
+  not support `poll`/`select` or wait queues.
+- No `ioctl` or `mmap` support.
 - No persistence: the message is lost on module unload.
 - Not tested against realtime/PREEMPT_RT kernels or non-x86 architectures.
 - This is an educational driver, not a production or hardware driver.
@@ -153,11 +142,6 @@ had three gaps, fixed without changing its external behavior or API:
 - Built and loaded against Linux 6.10 (this repository's custom kernel;
   see `kernel-build/README.md`) and, separately, against a Clang/LTO
   distribution kernel using `LLVM=1`.
-- As part of this documentation update, the driver was re-compiled
-  (`make LLVM=1`) against the headers of the machine's locally running
-  kernel (a CachyOS 7.1.4 build, *not* the project's own Linux 6.10 tree)
-  purely to confirm the source still builds cleanly after the
-  correctness fixes below — it was not re-loaded (`insmod`) or
-  functionally re-tested. Compilation against GCC, and any testing
-  against a real Linux 6.10 build, is unverified by this update — see
-  the repository root README's "Manual verification checklist."
+- The historical kernel/compiler combinations above predate the ring-buffer
+  change. Rebuild and run `scripts/test-chardev.sh` on a Linux test system to
+  verify this revision at runtime.

@@ -6,41 +6,94 @@
 
 #define DEVICE_NAME "mychardev"
 #define MSG_SIZE 256
+#define RING_CAPACITY 16
+
+struct message {
+    size_t len;
+    char data[MSG_SIZE];
+};
+
+struct message_ring {
+    struct message entries[RING_CAPACITY];
+    size_t head;
+    size_t tail;
+    size_t count;
+    size_t read_offset;
+};
 
 static int major;
 static struct class *cls;
-static char msg[MSG_SIZE] = {0};
-static size_t msg_len;
-/* Protects msg/msg_len: read()/write() from different processes race on
- * the single shared buffer without this. */
+static struct message_ring ring;
+/* Protects the queue and the partial-read position. */
 static DEFINE_MUTEX(dev_lock);
 
-static ssize_t dev_read(struct file *f, char __user *buf, size_t len, loff_t *off) {
-    ssize_t ret;
+static ssize_t dev_read(struct file *file, char __user *buf, size_t len,
+            loff_t *off)
+{
+    struct message *message;
+    size_t bytes;
+
+    (void)file;
+    (void)off;
 
     if (mutex_lock_interruptible(&dev_lock))
         return -ERESTARTSYS;
-    ret = simple_read_from_buffer(buf, len, off, msg, msg_len);
-    mutex_unlock(&dev_lock);
-    return ret;
-}
 
-static ssize_t dev_write(struct file *f, const char __user *buf, size_t len, loff_t *off) {
-    if (len > MSG_SIZE - 1)
-        len = MSG_SIZE - 1;
+    if (!ring.count || !len) {
+        mutex_unlock(&dev_lock);
+        return 0;
+    }
 
-    if (mutex_lock_interruptible(&dev_lock))
-        return -ERESTARTSYS;
-    if (copy_from_user(msg, buf, len)) {
+    message = &ring.entries[ring.head];
+    bytes = min(len, message->len - ring.read_offset);
+    if (copy_to_user(buf, message->data + ring.read_offset, bytes)) {
         mutex_unlock(&dev_lock);
         return -EFAULT;
     }
-    msg[len] = '\0';
-    msg_len = len;
+
+    ring.read_offset += bytes;
+    if (ring.read_offset == message->len) {
+        ring.head = (ring.head + 1) % RING_CAPACITY;
+        ring.count--;
+        ring.read_offset = 0;
+    }
+
+    mutex_unlock(&dev_lock);
+    return bytes;
+}
+
+static ssize_t dev_write(struct file *file, const char __user *buf, size_t len,
+             loff_t *off)
+{
+    struct message *message;
+
+    (void)file;
+    (void)off;
+
+    if (!len)
+        return 0;
+    if (len > MSG_SIZE)
+        len = MSG_SIZE;
+
+    if (mutex_lock_interruptible(&dev_lock))
+        return -ERESTARTSYS;
+
+    if (ring.count == RING_CAPACITY) {
+        mutex_unlock(&dev_lock);
+        return -ENOSPC;
+    }
+
+    message = &ring.entries[ring.tail];
+    if (copy_from_user(message->data, buf, len)) {
+        mutex_unlock(&dev_lock);
+        return -EFAULT;
+    }
+
+    message->len = len;
+    ring.tail = (ring.tail + 1) % RING_CAPACITY;
+    ring.count++;
     mutex_unlock(&dev_lock);
 
-    /* Report full length written, even though it may have been truncated
-     * to fit msg[], so short writes are never falsely reported. */
     return len;
 }
 
@@ -50,7 +103,11 @@ static const struct file_operations fops = {
     .write = dev_write,
 };
 
-static int __init chardev_init(void) {
+static int __init chardev_init(void)
+{
+    struct device *device;
+    int ret;
+
     major = register_chrdev(0, DEVICE_NAME, &fops);
     if (major < 0) {
         printk(KERN_ERR "mychardev: register_chrdev failed: %d\n", major);
@@ -64,18 +121,21 @@ static int __init chardev_init(void) {
         return PTR_ERR(cls);
     }
 
-    if (IS_ERR(device_create(cls, NULL, MKDEV(major, 0), NULL, DEVICE_NAME))) {
+    device = device_create(cls, NULL, MKDEV(major, 0), NULL, DEVICE_NAME);
+    if (IS_ERR(device)) {
+        ret = PTR_ERR(device);
         class_destroy(cls);
         unregister_chrdev(major, DEVICE_NAME);
-        printk(KERN_ERR "mychardev: device_create failed\n");
-        return -ENODEV;
+        printk(KERN_ERR "mychardev: device_create failed: %d\n", ret);
+        return ret;
     }
 
     printk(KERN_INFO "mychardev: loaded, major=%d\n", major);
     return 0;
 }
 
-static void __exit chardev_exit(void) {
+static void __exit chardev_exit(void)
+{
     device_destroy(cls, MKDEV(major, 0));
     class_destroy(cls);
     unregister_chrdev(major, DEVICE_NAME);
@@ -85,4 +145,4 @@ static void __exit chardev_exit(void) {
 module_init(chardev_init);
 module_exit(chardev_exit);
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Minimal character device driver for read/write testing");
+MODULE_DESCRIPTION("Message-oriented ring-buffer character device driver");

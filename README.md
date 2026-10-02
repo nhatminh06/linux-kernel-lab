@@ -30,7 +30,7 @@ Userspace-to-kernel communication through the driver:
 flowchart TD
     A[Userspace test process] -->|read/write syscalls| B["/dev/mychardev"]
     B -->|VFS file_operations| C[chardev kernel module]
-    C -->|kernel buffer + mutex| D[Linux kernel running in QEMU]
+    C -->|16-message ring + mutex| D[Linux kernel running in QEMU]
 ```
 
 Build and debug artifact flow:
@@ -154,8 +154,9 @@ narrative and [`qemu-gdb/README.md`](qemu-gdb/README.md) for the
 
 ## Limitations
 
-- `chardev-driver` is an educational character driver, not a production
-  or hardware driver — no interrupts, DMA, `ioctl`, or per-fd state (see
+- `chardev-driver` is an educational character driver with a bounded,
+  non-blocking 16-message FIFO, not a production or hardware driver — no
+  interrupts, DMA, `ioctl`, or per-fd state (see
   [`chardev-driver/README.md`](chardev-driver/README.md) § Known
   limitations).
 - Tested only against the specific kernel/compiler combinations
