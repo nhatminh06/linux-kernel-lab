@@ -73,10 +73,17 @@ make -C chardev-driver LLVM=1  # omit LLVM=1 for a GCC-built kernel
 sudo scripts/test-chardev.sh --module chardev-driver/chardev.ko
 ```
 
-The privileged test covers seven behaviors: round trip, FIFO ordering, embedded
-NUL plus partial reads, full-queue rejection, reuse after draining, empty reads,
-and clean unloading. It modifies kernel state, so it is deliberately not run by
-hosted CI.
+The privileged test covers nine checks: round trip, FIFO ordering, embedded NUL
+payloads, partial reads, 16-message capacity, `ENOSPC` on the 17th write, reuse
+after draining, an empty zero-byte read, and clean unloading. It modifies kernel
+state, so it is deliberately not run by hosted CI.
+
+## Evidence
+
+- [GDB stopped at `start_kernel()`](docs/assets/gdb-start-kernel.png), rendered
+  from the [authentic recorded session](qemu-gdb/notes.md).
+- [Full evidence checklist](docs/evidence-checklist.md), with unavailable
+  runtime and QEMU evidence deliberately left unchecked.
 
 ## Documentation map
 
@@ -105,5 +112,4 @@ items with authentic evidence.
 
 ## License
 
-No repository-level license has been selected. The file is intentionally absent
-rather than silently choosing legal terms on the owner's behalf.
+This repository does not currently declare a license.

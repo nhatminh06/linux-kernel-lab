@@ -60,16 +60,9 @@ granularity versus timer interrupt overhead. This is a deliberate,
 documented experiment, not a default anyone should copy without a
 reason.
 
-| Configuration | Nominal tick interval | Scheduling/timer tradeoff |
-|---|---:|---|
-| `CONFIG_HZ=1000` | 1 ms | Finer periodic-tick granularity, with up to 1000 timer interrupts per second per tick-driven CPU |
-| `CONFIG_HZ=300` | 3.33 ms | Coarser periodic-tick granularity, with up to 300 timer interrupts per second per tick-driven CPU |
-
-This comparison concerns the configured periodic tick. Tickless-kernel options
-can suppress ticks while CPUs are idle—and, with full dynticks, in additional
-contexts—so these values are not a claim that every CPU always receives exactly
-that many interrupts. Modern high-resolution timers also are not limited to one
-`CONFIG_HZ` interval.
+See [the CONFIG_HZ comparison](../docs/technical-notes.md#kernel-timer-configuration)
+for the nominal tick intervals and the important tickless-kernel and
+high-resolution-timer caveats.
 
 ### How to inspect/apply `config-diff.patch`
 

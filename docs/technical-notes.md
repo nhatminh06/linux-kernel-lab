@@ -18,6 +18,21 @@ These are observations from Linux 6.10 with the documented host toolchains, not
 universal remedies. In particular, `-cpu max` favors faithful local reproduction
 over migration compatibility and is not a portable deployment recommendation.
 
+## Kernel timer configuration
+
+This lab changed the kernel timer frequency from the baseline configuration's
+`CONFIG_HZ=1000` to `CONFIG_HZ=300`.
+
+| Configuration | Nominal periodic tick interval | Timer tradeoff |
+|---|---:|---|
+| `CONFIG_HZ=1000` | 1 ms | Finer periodic-tick granularity, with up to 1000 timer interrupts per second per tick-driven CPU |
+| `CONFIG_HZ=300` | Approximately 3.33 ms | Coarser periodic-tick granularity, with up to 300 timer interrupts per second per tick-driven CPU |
+
+This is a timer-tick comparison, not a schedule for every task switch or
+scheduling decision. Tickless-kernel options can suppress ticks while CPUs are
+idle—and, with full dynticks, in additional contexts. Modern high-resolution
+timers are also not limited to one `CONFIG_HZ` interval.
+
 ## Lessons retained
 
 - Toolchain drift can look like a kernel source defect. Kernel version,
